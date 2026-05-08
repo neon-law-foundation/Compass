@@ -13,12 +13,15 @@ let package = Package(
         .executable(name: "Compass", targets: ["Compass"]),
     ],
     dependencies: [
-        // TODO: switch to a tagged release once Navigator publishes one with
-        // NavigatorDefaultRules.all() landed on `main`. Pinned to the feature
-        // branch from neon-law-foundation/Navigator#7 until that PR merges.
+        // Pinned to the immutable SHA behind Navigator's v2026.05.08 release
+        // tag. Navigator's tag format (vYYYY.MM.DD with zero-padded month and
+        // day) is not semver-2.0-compatible, so SPM's `.exact(_:)` cannot
+        // accept it; `.revision(_:)` resolves the tag once and locks the
+        // dependency to a specific commit — strictly more exact than
+        // `.exact()` since a tag could in principle be moved.
         .package(
             url: "https://github.com/neon-law-foundation/Navigator.git",
-            branch: "extensible-navigator-rules"
+            revision: "18241315c91c375a11494332d43f3fca4e4570f6"
         )
     ],
     targets: [

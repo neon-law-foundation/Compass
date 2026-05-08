@@ -54,8 +54,15 @@ Make sure `~/.local/bin` is on your `PATH`, then:
 compass lint .
 ```
 
-A Homebrew formula will follow once the upstream Navigator dependency
-is pinned to a tagged release.
+Compass pins Navigator to the exact commit behind the
+[`v2026.05.08`](https://github.com/neon-law-foundation/Navigator/releases/tag/v2026.05.08)
+release tag (SHA `18241315c91c375a11494332d43f3fca4e4570f6`). Navigator's
+tag format (`vYYYY.MM.DD`) isn't semver-compatible, so SPM's
+`.exact(_:)` can't be used directly — `.revision(_:)` against the
+release SHA is strictly more exact and rolls forward only when this
+file is changed.
+
+A Homebrew formula will follow.
 
 ## Usage
 
