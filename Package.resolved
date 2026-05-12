@@ -1,5 +1,5 @@
 {
-  "originHash" : "bc629ab649f5c4242578e70bfc4acf442c11af780ab213949da30455256ec836",
+  "originHash" : "af84d2df62a837ff573d30ba3d3724d3354cf7854b672870021346c17cbc9eee",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -114,7 +114,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/neon-law-foundation/Navigator.git",
       "state" : {
-        "revision" : "18241315c91c375a11494332d43f3fca4e4570f6"
+        "revision" : "945f1e72f094f8aa276235cefe8798ea97693521"
       }
     },
     {
