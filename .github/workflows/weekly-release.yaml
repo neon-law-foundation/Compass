@@ -2,11 +2,10 @@
 name: Weekly Release
 
 on:
-  schedule:
-    # Run every Wednesday at 2 AM UTC
-    - cron: "0 2 * * 3"
   workflow_dispatch:
-    # Allow manual triggering
+    # Releases are cut manually after the Navigator dependency pin is
+    # updated. Trigger via `gh workflow run weekly-release.yaml --ref main`
+    # or the Actions UI.
 
 concurrency:
   group: weekly-release
