@@ -1,0 +1,288 @@
+---
+name: Weekly Release
+
+on:
+  schedule:
+    # Run every Wednesday at 2 AM UTC
+    - cron: "0 2 * * 3"
+  workflow_dispatch:
+    # Allow manual triggering
+
+concurrency:
+  group: weekly-release
+  cancel-in-progress: false
+
+env:
+  SWIFT_VERSION: "6.3.1"
+
+jobs:
+  generate-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      exists: ${{ steps.check_release.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate version
+        id: version
+        run: |
+          VERSION=$(date -u +"%Y.%-m.%-d")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Generated version: $VERSION"
+
+      - name: Check if release already exists
+        id: check_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if gh release view "$VERSION" > /dev/null 2>&1; then
+            echo "Release $VERSION already exists, skipping"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release $VERSION does not exist, proceeding"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-linux:
+    needs: generate-version
+    if: needs.generate-version.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Swift toolchain
+        # Using SwiftyLab/setup-swift — see ci.yaml for rationale.
+        uses: SwiftyLab/setup-swift@v1.14.0
+        with:
+          swift-version: ${{ env.SWIFT_VERSION }}
+
+      - name: Cache Swift Package Manager dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/.cache/org.swift.swiftpm
+          key: spm-linux-release-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          restore-keys: |
+            spm-linux-release-
+
+      - name: Build for Linux (x86_64, static stdlib)
+        run: |
+          swift build -c release \
+            --product Compass \
+            --static-swift-stdlib
+          mkdir -p dist/linux-x86_64
+          cp .build/release/Compass dist/linux-x86_64/compass
+
+      - name: Verify binary
+        run: |
+          file dist/linux-x86_64/compass
+          dist/linux-x86_64/compass lint README.md
+
+      - name: Package binary
+        run: |
+          VERSION="${{ needs.generate-version.outputs.version }}"
+          mkdir -p release
+          tar -czf "release/compass-${VERSION}-linux-x86_64.tar.gz" \
+            -C dist/linux-x86_64 compass
+
+      - name: Upload Linux tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: compass-linux-x86_64
+          path: release/compass-*-linux-x86_64.tar.gz
+          retention-days: 1
+
+  build-and-release:
+    needs: [generate-version, build-linux]
+    if: needs.generate-version.outputs.exists == 'false'
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Swift toolchain
+        # Using SwiftyLab/setup-swift — see ci.yaml for rationale.
+        uses: SwiftyLab/setup-swift@v1.14.0
+        with:
+          swift-version: ${{ env.SWIFT_VERSION }}
+
+      - name: Cache Swift Package Manager dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/.cache/org.swift.swiftpm
+          key: spm-macos-release-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          restore-keys: |
+            spm-macos-release-
+
+      - name: Build for Apple Silicon (arm64)
+        run: |
+          swift build -c release --product Compass --arch arm64
+          mkdir -p dist/arm64
+          cp .build/arm64-apple-macosx/release/Compass dist/arm64/compass
+
+      - name: Build for Intel (x86_64)
+        run: |
+          swift build -c release --product Compass --arch x86_64
+          mkdir -p dist/x86_64
+          cp .build/x86_64-apple-macosx/release/Compass dist/x86_64/compass
+
+      - name: Create universal binary
+        run: |
+          mkdir -p dist/universal
+          lipo -create \
+            dist/arm64/compass \
+            dist/x86_64/compass \
+            -output dist/universal/compass
+          lipo -info dist/universal/compass
+
+      - name: Verify binaries
+        run: |
+          echo "Verifying arm64 binary..."
+          file dist/arm64/compass
+          dist/arm64/compass lint README.md || true
+
+          echo "Verifying x86_64 binary..."
+          file dist/x86_64/compass
+
+          echo "Verifying universal binary..."
+          file dist/universal/compass
+          dist/universal/compass lint README.md
+
+      - name: Package macOS binaries
+        run: |
+          VERSION="${{ needs.generate-version.outputs.version }}"
+          mkdir -p release
+
+          tar -czf "release/compass-${VERSION}-macos-arm64.tar.gz" \
+            -C dist/arm64 compass
+
+          tar -czf "release/compass-${VERSION}-macos-x86_64.tar.gz" \
+            -C dist/x86_64 compass
+
+          tar -czf "release/compass-${VERSION}-macos-universal.tar.gz" \
+            -C dist/universal compass
+
+      - name: Download Linux tarball artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: compass-linux-x86_64
+          path: release
+
+      - name: Compute checksums
+        run: |
+          cd release
+          shasum -a 256 *.tar.gz > checksums.txt
+          cat checksums.txt
+
+      - name: Create GitHub Release
+        id: create_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.generate-version.outputs.version }}"
+          gh release create "$VERSION" \
+            --title "Compass $VERSION" \
+            --notes "Weekly automated release for $(date -u +%Y-%m-%d).
+
+          ## Installation
+
+          ### Homebrew (Recommended, macOS)
+          \`\`\`bash
+          brew tap neon-law-foundation/tap
+          brew install compass
+          \`\`\`
+
+          ### Linux
+          \`\`\`bash
+          curl -L \"https://github.com/neon-law-foundation/Compass/releases/download/${VERSION}/compass-${VERSION}-linux-x86_64.tar.gz\" \\
+            | sudo tar -xzC /usr/local/bin/
+          \`\`\`
+
+          ### Manual Download
+          Download the appropriate binary for your system:
+          - **Apple Silicon (M1/M2/M3)**: \`compass-${VERSION}-macos-arm64.tar.gz\`
+          - **Intel macOS**: \`compass-${VERSION}-macos-x86_64.tar.gz\`
+          - **Universal macOS**: \`compass-${VERSION}-macos-universal.tar.gz\`
+          - **Linux x86_64 (static)**: \`compass-${VERSION}-linux-x86_64.tar.gz\`
+
+          Then extract and move to your PATH:
+          \`\`\`bash
+          tar -xzf compass-${VERSION}-macos-universal.tar.gz
+          sudo mv compass /usr/local/bin/
+          \`\`\`
+          " \
+            release/compass-*.tar.gz \
+            release/checksums.txt
+
+      - name: Calculate checksums for formula
+        id: checksums
+        run: |
+          VERSION="${{ needs.generate-version.outputs.version }}"
+          ARM64_SHA=$(shasum -a 256 "release/compass-${VERSION}-macos-arm64.tar.gz" | awk '{print $1}')
+          X86_64_SHA=$(shasum -a 256 "release/compass-${VERSION}-macos-x86_64.tar.gz" | awk '{print $1}')
+          echo "arm64_sha=$ARM64_SHA" >> "$GITHUB_OUTPUT"
+          echo "x86_64_sha=$X86_64_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Update Homebrew formula
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN is not set. Skipping Homebrew formula update."
+            exit 0
+          fi
+
+          VERSION="${{ needs.generate-version.outputs.version }}"
+          ARM64_SHA="${{ steps.checksums.outputs.arm64_sha }}"
+          X86_64_SHA="${{ steps.checksums.outputs.x86_64_sha }}"
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/neon-law-foundation/homebrew-tap.git" tap
+
+          mkdir -p tap/Formula
+
+          cat > tap/Formula/compass.rb << FORMULA_EOF
+          class Compass < Formula
+            desc "Markdown linter that extends Navigator with Foundation-specific rules"
+            homepage "https://github.com/neon-law-foundation/Compass"
+            version "${VERSION}"
+            license "Apache-2.0"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/neon-law-foundation/Compass/releases/download/${VERSION}/compass-${VERSION}-macos-arm64.tar.gz"
+                sha256 "${ARM64_SHA}"
+              end
+              on_intel do
+                url "https://github.com/neon-law-foundation/Compass/releases/download/${VERSION}/compass-${VERSION}-macos-x86_64.tar.gz"
+                sha256 "${X86_64_SHA}"
+              end
+            end
+
+            def install
+              bin.install "compass"
+            end
+
+            test do
+              assert_match "^compass ", shell_output("#{bin}/compass --version")
+            end
+          end
+          FORMULA_EOF
+
+          sed -i '' 's/^          //' tap/Formula/compass.rb
+
+          cd tap
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git checkout -B main
+          git add Formula/compass.rb
+          git commit -m "chore: update compass to ${VERSION}"
+          git push -u origin main
