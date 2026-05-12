@@ -9,6 +9,10 @@ guard arguments.count >= 2 else {
 }
 
 let command = arguments[1]
+if command == "--version" || command == "-v" {
+    print("compass version dev (built from source)")
+    exit(0)
+}
 guard command == "lint" else {
     FileHandle.standardError.write(Data("Unknown command: \(command)\n".utf8))
     FileHandle.standardError.write(Data("Usage: compass lint <path>\n".utf8))
